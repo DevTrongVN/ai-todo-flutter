@@ -1,36 +1,50 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class GeminiService {
-  static Future<List<Map<String, dynamic>>?> chatAndAct(String input, {String groupContext = "", String currentScreen = "personal"}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final apiKey = prefs.getString('gemini_api_key');
+  // 🔥 LƯU RAM: 캐 (Cache) API Key để không phải tốn tiền gọi Firebase nhiều lần
+  static String? _cachedApiKey;
 
-    if (apiKey == null || apiKey.isEmpty) {
-      return [{"type": "error", "message": "Bạn chưa cấu hình API Key. Vui lòng vào mục Hồ Sơ để cài đặt."}];
+  static Future<List<Map<String, dynamic>>?> chatAndAct(String input, {String groupContext = "", String currentScreen = "personal"}) async {
+
+    // Chỉ lên Firebase lấy Key nếu RAM chưa có
+    if (_cachedApiKey == null || _cachedApiKey!.isEmpty) {
+      try {
+        var doc = await FirebaseFirestore.instance.collection('app_config').doc('keys').get();
+        if (doc.exists && doc.data() != null) {
+          _cachedApiKey = doc.data()!['gemini_api_key'] ?? "";
+        }
+      } catch (e) {
+        return [{"type": "error", "message": "Lỗi kết nối máy chủ AI."}];
+      }
     }
 
-    final url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$apiKey";
+    if (_cachedApiKey == null || _cachedApiKey!.isEmpty) {
+      return [{"type": "error", "message": "Hệ thống AI đang bảo trì (Thiếu API Key)."}] ;
+    }
+
+    final url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$_cachedApiKey";
     String now = DateTime.now().toIso8601String();
 
     String locationContext = currentScreen == "personal"
-        ? "Người dùng đang ở KHÔNG GIAN CÁ NHÂN. Nếu họ yêu cầu tạo lịch mà không nói rõ là cho nhóm nào, hãy MẶC ĐỊNH tạo lịch CÁ NHÂN."
-        : "Người dùng đang ở TRONG MỘT NHÓM CỤ THỂ (ID nhóm sẽ được cung cấp nếu họ có quyền). Nếu họ yêu cầu tạo lịch, hãy ưu tiên tạo lịch cho nhóm này trừ khi họ yêu cầu khác.";
+        ? "Người dùng đang ở KHÔNG GIAN CÁ NHÂN. Mặc định tạo lịch Cá Nhân nếu họ không nhắc đến nhóm."
+        : "Người dùng đang ở TRONG MỘT NHÓM. Mặc định tạo lịch Nhóm nếu họ không nói khác.";
 
     final systemInstruction = """
-Bạn là AI Trợ lý Quản lý Công việc thông minh và thân thiện. Hiện tại: $now.
+Bạn là AI Quản lý Lịch Trình (Cá nhân & Nhóm). Thời gian hiện tại: $now.
 $locationContext
 
-Dưới đây là danh sách các Nhóm mà người dùng đang có quyền Quản trị:
+DANH SÁCH NHÓM CÓ QUYỀN ADMIN/PHÓ NHÓM (Chỉ được sửa/xóa/tạo ở đây):
 $groupContext
 
-HƯỚNG DẪN XỬ LÝ:
-1. GIAO TIẾP THÔNG THƯỜNG: Trả lời tự nhiên, thân thiện bằng văn bản.
-2. LỊCH CÁ NHÂN: "create", "update", "delete_mass".
-3. LỊCH NHÓM: BẮT BUỘC dùng action "create_group_task". BẠN PHẢI điền chính xác "groupId" dựa vào danh sách trên. Nếu người dùng yêu cầu tạo lịch cho nhóm không có trong danh sách, KHÔNG ĐƯỢC GỌI HÀM, hãy trả lời bằng văn bản báo cho họ biết họ không có quyền hoặc sai tên nhóm.
-
-QUY ƯỚC DỮ LIỆU: Lặp lại (NONE, DAILY, WEEKLY). Thứ 2 = 1, Chủ nhật = 7.
+HƯỚNG DẪN DÙNG HÀM:
+1. Giao tiếp: Trả lời tự nhiên bằng text.
+2. Lịch cá nhân: "create", "update", "delete". 
+3. Lịch nhóm: "create_group_task", "update_group_task", "delete_group_task".
+  - PHẢI điền chính xác "groupId" lấy từ danh sách trên.
+  - Từ chối nếu họ yêu cầu thao tác nhóm không có trong danh sách.
+4. Update/Delete: Cần truyền mảng `targetTitles` chứa các từ khóa trong tên lịch.
 """;
 
     try {
@@ -49,7 +63,7 @@ QUY ƯỚC DỮ LIỆU: Lặp lại (NONE, DAILY, WEEKLY). Thứ 2 = 1, Chủ nh
               "function_declarations": [
                 {
                   "name": "manage_tasks",
-                  "description": "Chỉ gọi hàm này khi cần Tạo, Sửa, Xóa Hàng Loạt hoặc Tạo Lịch Nhóm.",
+                  "description": "Gọi để Tạo, Sửa, Xóa lịch Cá Nhân hoặc Nhóm.",
                   "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -64,7 +78,6 @@ QUY ƯỚC DỮ LIỆU: Lặp lại (NONE, DAILY, WEEKLY). Thứ 2 = 1, Chủ nh
                             "datetime": {"type": "STRING"},
                             "remindBeforeMins": {"type": "NUMBER"},
                             "repeatMode": {"type": "STRING"},
-                            "deleteCondition": {"type": "STRING"},
                             "groupId": {"type": "STRING"},
                             "targetTitles": {
                               "type": "ARRAY",
@@ -88,38 +101,17 @@ QUY ƯỚC DỮ LIỆU: Lặp lại (NONE, DAILY, WEEKLY). Thứ 2 = 1, Chủ nh
 
       final data = jsonDecode(res.body);
 
-      // ====================================================
-      // 🔥 CÁC LỚP BẢO VỆ CHỐNG SẬP (NULL CRASH)
-      // ====================================================
-
-      // 1. Kiểm tra Server Google có báo lỗi không (Lỗi hàm, quá tải, API...)
       if (data.containsKey("error")) {
-        String errorMsg = data["error"]["message"] ?? "Lỗi không xác định.";
-        return [{"type": "error", "message": "Google từ chối: $errorMsg"}];
+        return [{"type": "error", "message": "Google báo lỗi: ${data['error']['message']}"}];
       }
 
-      // 2. Kiểm tra AI có trả về kết quả không
-      if (data["candidates"] == null || (data["candidates"] as List).isEmpty) {
-        return [{"type": "error", "message": "AI từ chối trả lời (Có thể câu lệnh vi phạm an toàn)."}];
-      }
-
-      // 3. Kiểm tra nội dung có bị rỗng không
-      var content = data["candidates"][0]["content"];
-      if (content == null || content["parts"] == null || (content["parts"] as List).isEmpty) {
-        return [{"type": "error", "message": "Nội dung trả về bị rỗng."}];
-      }
-
-      // ====================================================
-
-      final parts = content["parts"];
+      final parts = data["candidates"][0]["content"]["parts"];
       final firstPart = parts[0] as Map<String, dynamic>;
 
-      // Nếu AI gọi thao tác xử lý lịch
       if (firstPart.containsKey("functionCall")) {
         final args = firstPart["functionCall"]["args"] ?? {};
         List<Map<String, dynamic>> results = [];
-
-        if (args.containsKey("tasks") && args["tasks"] != null) {
+        if (args.containsKey("tasks")) {
           for (var item in args["tasks"]) {
             results.add({
               "type": "action",
@@ -129,7 +121,6 @@ QUY ƯỚC DỮ LIỆU: Lặp lại (NONE, DAILY, WEEKLY). Thứ 2 = 1, Chủ nh
               "datetime": item["datetime"],
               "remindBeforeMins": item["remindBeforeMins"],
               "repeatMode": item["repeatMode"],
-              "deleteCondition": item["deleteCondition"],
               "groupId": item["groupId"],
               "targetTitles": item["targetTitles"] != null ? List<String>.from(item["targetTitles"]) : null,
             });
@@ -138,11 +129,10 @@ QUY ƯỚC DỮ LIỆU: Lặp lại (NONE, DAILY, WEEKLY). Thứ 2 = 1, Chủ nh
         }
       }
 
-      // Nếu AI chỉ trò chuyện bình thường
-      return [{"type": "text", "message": firstPart["text"] ?? "Tôi chưa hiểu ý bạn, bạn nói lại nhé."}];
+      return [{"type": "text", "message": firstPart["text"] ?? "Tôi chưa hiểu ý bạn."}];
 
     } catch (e) {
-      return [{"type": "error", "message": "❌ Lỗi hệ thống: $e"}];
+      return [{"type": "error", "message": "Lỗi hệ thống: $e"}];
     }
   }
 }

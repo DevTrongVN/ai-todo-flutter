@@ -14,14 +14,16 @@ class GroupsScreen extends StatefulWidget {
 class _GroupsScreenState extends State<GroupsScreen> {
   final String myUid = FirebaseAuth.instance.currentUser?.uid ?? "";
 
-  // HÀM TẠO MÃ NGẪU NHIÊN 6 KÝ TỰ
+  // 🔥 Biến lưu từ khóa tìm kiếm nhóm
+  String _searchGroupQuery = "";
+  final TextEditingController _searchController = TextEditingController();
+
   String _generateCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     Random rnd = Random();
     return String.fromCharCodes(Iterable.generate(6, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
   }
 
-  // TẠO NHÓM MỚI
   void _createGroup() {
     TextEditingController nameController = TextEditingController();
     showDialog(
@@ -40,7 +42,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               if (nameController.text.trim().isEmpty) return;
               Navigator.pop(context);
 
-              String code = "G-${_generateCode()}"; // VD: G-A1B2C3
+              String code = "G-${_generateCode()}";
               var ref = FirebaseFirestore.instance.collection('groups').doc();
 
               await ref.set({
@@ -48,7 +50,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                 'name': nameController.text.trim(),
                 'inviteCode': code,
                 'members': [myUid],
-                'roles': {myUid: 'admin'}, // Người tạo tự động làm admin
+                'roles': {myUid: 'admin'},
                 'createdAt': DateTime.now().toIso8601String()
               });
 
@@ -61,7 +63,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 
-  // VÀO NHÓM BẰNG MÃ
   void _joinGroup() {
     TextEditingController codeController = TextEditingController();
     showDialog(
@@ -81,7 +82,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
               if (code.isEmpty) return;
               Navigator.pop(context);
 
-              // Tìm nhóm có mã code tương ứng
               var query = await FirebaseFirestore.instance.collection('groups').where('inviteCode', isEqualTo: code).get();
 
               if (query.docs.isEmpty) {
@@ -91,7 +91,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
               var doc = query.docs.first;
 
-              // Cập nhật Database: Thêm mình vào mảng members, set role là member
               await doc.reference.update({
                 'members': FieldValue.arrayUnion([myUid]),
                 'roles.$myUid': 'member'
@@ -122,64 +121,100 @@ class _GroupsScreenState extends State<GroupsScreen> {
           IconButton(icon: const Icon(Icons.login), onPressed: _joinGroup, tooltip: "Tham gia nhóm"),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        // Lắng nghe realtime các nhóm mà mình là thành viên
-        stream: FirebaseFirestore.instance.collection('groups').where('members', arrayContains: myUid).snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.group_off, size: 80, color: Colors.grey.shade400),
-                  const SizedBox(height: 10),
-                  const Text("Bạn chưa tham gia nhóm nào", style: TextStyle(color: Colors.grey, fontSize: 16)),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      ElevatedButton.icon(icon: const Icon(Icons.add), label: const Text("Tạo nhóm"), onPressed: _createGroup),
-                      const SizedBox(width: 10),
-                      OutlinedButton.icon(icon: const Icon(Icons.login), label: const Text("Vào nhóm"), onPressed: _joinGroup),
-                    ],
-                  )
-                ],
+      body: Column(
+        children: [
+          // 🔥 THANH TÌM KIẾM NHÓM
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: "Tìm kiếm nhóm đã tham gia...",
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                contentPadding: const EdgeInsets.symmetric(vertical: 0),
               ),
-            );
-          }
+              onChanged: (value) {
+                setState(() {
+                  _searchGroupQuery = value;
+                });
+              },
+            ),
+          ),
 
-          var groups = snapshot.data!.docs;
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance.collection('groups').where('members', arrayContains: myUid).snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: groups.length,
-            itemBuilder: (context, index) {
-              var group = groups[index].data() as Map<String, dynamic>;
-              int memberCount = (group['members'] as List).length;
-              bool isAdmin = group['roles'][myUid] == 'admin';
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.group_off, size: 80, color: Colors.grey.shade400),
+                        const SizedBox(height: 10),
+                        const Text("Bạn chưa tham gia nhóm nào", style: TextStyle(color: Colors.grey, fontSize: 16)),
+                        const SizedBox(height: 20),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ElevatedButton.icon(icon: const Icon(Icons.add), label: const Text("Tạo nhóm"), onPressed: _createGroup),
+                            const SizedBox(width: 10),
+                            OutlinedButton.icon(icon: const Icon(Icons.login), label: const Text("Vào nhóm"), onPressed: _joinGroup),
+                          ],
+                        )
+                      ],
+                    ),
+                  );
+                }
 
-              return Card(
-                elevation: 2,
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  leading: const CircleAvatar(
-                    backgroundColor: Colors.deepPurple,
-                    child: Icon(Icons.groups, color: Colors.white),
-                  ),
-                  title: Text(group['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  subtitle: Text("$memberCount thành viên  •  Mã: ${group['inviteCode']}"),
-                  trailing: isAdmin ? const Icon(Icons.star, color: Colors.amber) : null,
-                  onTap: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => GroupDetailScreen(groupData: group, currentUserId: myUid)));
+                var groups = snapshot.data!.docs;
+
+                // 🔥 LỌC NHÓM THEO TỪ KHÓA TÌM KIẾM
+                var filteredGroups = groups.where((doc) {
+                  var groupData = doc.data() as Map<String, dynamic>;
+                  String groupName = groupData['name'] ?? "";
+                  return groupName.toLowerCase().contains(_searchGroupQuery.toLowerCase());
+                }).toList();
+
+                if (filteredGroups.isEmpty) {
+                  return const Center(child: Text("Không tìm thấy nhóm phù hợp."));
+                }
+
+                return ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  itemCount: filteredGroups.length,
+                  itemBuilder: (context, index) {
+                    var group = filteredGroups[index].data() as Map<String, dynamic>;
+                    int memberCount = (group['members'] as List).length;
+                    bool isAdmin = group['roles'][myUid] == 'admin';
+
+                    return Card(
+                      elevation: 2,
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        leading: const CircleAvatar(
+                          backgroundColor: Colors.deepPurple,
+                          child: Icon(Icons.groups, color: Colors.white),
+                        ),
+                        // Loại bỏ màu tĩnh để tự động đổi màu theo Sáng/Tối
+                        title: Text(group['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        subtitle: Text("$memberCount thành viên  •  Mã: ${group['inviteCode']}"),
+                        trailing: isAdmin ? const Icon(Icons.star, color: Colors.amber) : null,
+                        onTap: () {
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => GroupDetailScreen(groupData: group, currentUserId: myUid)));
+                        },
+                      ),
+                    );
                   },
-                ),
-              );
-            },
-          );
-        },
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

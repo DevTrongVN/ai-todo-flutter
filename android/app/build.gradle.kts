@@ -48,7 +48,7 @@ android {
 // 👉 Chuyển block dependencies xuống dưới khối android (chuẩn cấu trúc Gradle)
 dependencies {
     // 👉 Sử dụng ngoặc đơn () và ngoặc kép "" cho Kotlin DSL
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {
